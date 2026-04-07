@@ -215,6 +215,58 @@ make test-midi-fx
 ./scripts/build.sh
 ```
 
+## Publish As Custom Module
+
+To publish `Branchage` through the Schwung Module Store, build the release tarball and publish a tagged GitHub release.
+
+Create the package locally:
+
+```bash
+./scripts/package.sh
+```
+
+This produces the exact structure Schwung expects:
+
+```text
+dist/branchage-module.tar.gz
+└── branchage/
+    ├── module.json
+    ├── dsp.so
+    └── branchage_ui.js
+```
+
+Release flow:
+
+```bash
+git add .
+git commit -m "Release v0.2.0"
+git tag v0.2.0
+git push origin main
+git push origin v0.2.0
+```
+
+After the tag is pushed, GitHub Actions will:
+
+- build `branchage-module.tar.gz`
+- create the GitHub release
+- update `release.json` on `main`
+
+Suggested Module Store catalog entry:
+
+```json
+{
+  "id": "branchage",
+  "name": "Branchage",
+  "description": "Grids drum maps with per-lane Branches-style note branching",
+  "author": "Mutable Instruments ideas / port for Schwung Move",
+  "component_type": "midi_fx",
+  "github_repo": "broduoliviercontact-web/branchages-move",
+  "default_branch": "main",
+  "asset_name": "branchage-module.tar.gz",
+  "min_host_version": "0.3.0"
+}
+```
+
 ## Inspiration
 
 `Branchage` is inspired by Mutable Instruments modules and ideas, especially:
