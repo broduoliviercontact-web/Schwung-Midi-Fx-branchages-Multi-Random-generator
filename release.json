@@ -1,4 +1,8 @@
 {
-  "version": "0.2.0",
-  "download_url": "https://github.com/broduoliviercontact-web/branchages-move/releases/download/v0.2.0/branchage-module.tar.gz"
+    "id": "branchage",
+    "name": "Branchage",
+    "description": "Grids drum maps with per-lane Branches-style note branching",
+    "component_type": "midi_fx",
+    "latest_version": "0.2.0",
+    "download_url": "https://github.com/broduoliviercontact-web/branchages-move/releases/download/v0.2.0/branchage-module.tar.gz"
 }

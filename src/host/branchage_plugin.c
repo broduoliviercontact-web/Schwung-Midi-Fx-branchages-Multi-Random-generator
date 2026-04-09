@@ -1,7 +1,7 @@
 /*
  * branchage_plugin.c — Grids + per-lane Branches hybrid MIDI FX wrapper.
  *
- * API: midi_fx_api_v1_t  (entry point: move_midi_fx_init)
+ * API: plugin_api_v2_t  (entry point: move_plugin_init_v2)
  *
  * Clock modes:
  *   - sync=move: follows Move transport + Move BPM
@@ -13,10 +13,10 @@
  *   - Each lane can probabilistically replace its normal output note with
  *     an alternate "branch" note.
  *   - All notes are emitted as note-on + deferred note-off pairs.
+ *   - MIDI output is pushed via host->midi_send_internal (4-byte USB-MIDI packets).
  */
 
-#include "midi_fx_api_v1.h"
-#include "plugin_api_v1.h"
+#include "plugin_api_v2.h"
 #include "../dsp/grids_engine.h"
 #include "../dsp/branches_engine.h"
 
@@ -55,6 +55,7 @@
 #define VEL_NORMAL  80u
 #define VEL_ACCENT  127u
 
+/* Host API — set once in move_plugin_init_v2, shared across all instances. */
 static const host_api_v1_t *g_host = NULL;
 static int g_logged_first_tick = 0;
 
@@ -163,6 +164,10 @@ typedef struct {
     PendingNoteOff pending[GRIDS_NUM_LANES];
 } BranchageInstance;
 
+/* ---------------------------------------------------------------------------
+ * Parsers
+ * ------------------------------------------------------------------------- */
+
 static uint8_t parse_norm(const char *s)
 {
     if (!s) return 0;
@@ -251,6 +256,10 @@ static uint8_t parse_sync_mode(const char *s)
     return (uint8_t)(atoi(s) != 0);
 }
 
+/* ---------------------------------------------------------------------------
+ * Timing helpers
+ * ------------------------------------------------------------------------- */
+
 static float current_bpm(const BranchageInstance *bi)
 {
     if (bi && bi->sync_mode != 0) {
@@ -295,99 +304,75 @@ static uint8_t midi_clocks_per_gate(void)
     return gate > 0u ? gate : 1u;
 }
 
-static int emit_note_message(uint8_t status, uint8_t note, uint8_t vel,
-                             uint8_t out_msgs[][3], int out_lens[],
-                             int max_out, int count)
+/* ---------------------------------------------------------------------------
+ * MIDI output — push via host callback (4-byte USB-MIDI packets)
+ * cable=0, CIN: 0x09=NoteOn, 0x08=NoteOff
+ * ------------------------------------------------------------------------- */
+
+static void emit_note(uint8_t status, uint8_t note, uint8_t vel)
 {
-    if (count >= max_out) return count;
-    out_msgs[count][0] = status;
-    out_msgs[count][1] = note;
-    out_msgs[count][2] = vel;
-    out_lens[count] = 3;
-    return count + 1;
+    uint8_t cin = ((status & 0xF0u) == 0x90u) ? 0x09u : 0x08u;
+    uint8_t pkt[4] = { cin, status, note, vel };
+    if (g_host && g_host->midi_send_internal)
+        g_host->midi_send_internal(pkt, 4);
 }
 
-static int flush_pending_note(PendingNoteOff *pending,
-                              uint8_t out_msgs[][3], int out_lens[],
-                              int max_out, int count)
+static void flush_pending_note(PendingNoteOff *pending)
 {
-    if (!pending->active) return count;
-    count = emit_note_message((uint8_t)(MIDI_NOTE_OFF | (pending->channel & 0x0Fu)),
-                              pending->note, 0, out_msgs, out_lens, max_out, count);
+    if (!pending->active) return;
+    emit_note((uint8_t)(MIDI_NOTE_OFF | (pending->channel & 0x0Fu)),
+              pending->note, 0);
     pending->active = 0;
     pending->frames_left = 0;
     pending->clocks_left = 0u;
-    return count;
 }
 
-static int flush_all_notes(BranchageInstance *bi,
-                           uint8_t out_msgs[][3], int out_lens[],
-                           int max_out, int count)
+static void flush_all_notes(BranchageInstance *bi)
 {
-    for (int lane = 0; lane < GRIDS_NUM_LANES; lane++) {
-        count = flush_pending_note(&bi->pending[lane], out_msgs, out_lens, max_out, count);
-        if (count >= max_out) break;
-    }
-    return count;
+    for (int lane = 0; lane < GRIDS_NUM_LANES; lane++)
+        flush_pending_note(&bi->pending[lane]);
 }
 
-static int advance_pending_clock(PendingNoteOff *pending,
-                                 uint8_t out_msgs[][3], int out_lens[],
-                                 int max_out, int count)
+static void advance_pending_clock(PendingNoteOff *pending)
 {
-    if (!pending->active) return count;
-
+    if (!pending->active) return;
     if (pending->clocks_left > 0u) pending->clocks_left--;
     if (pending->clocks_left == 0u) {
-        count = emit_note_message((uint8_t)(MIDI_NOTE_OFF | (pending->channel & 0x0Fu)),
-                                  pending->note, 0, out_msgs, out_lens, max_out, count);
+        emit_note((uint8_t)(MIDI_NOTE_OFF | (pending->channel & 0x0Fu)),
+                  pending->note, 0);
         pending->active = 0;
         pending->frames_left = 0;
     }
-
-    return count;
 }
 
-static int advance_pending_clocks(BranchageInstance *bi,
-                                  uint8_t out_msgs[][3], int out_lens[],
-                                  int max_out, int count)
+static void advance_pending_clocks(BranchageInstance *bi)
 {
-    for (int lane = 0; lane < GRIDS_NUM_LANES; lane++) {
-        count = advance_pending_clock(&bi->pending[lane], out_msgs, out_lens, max_out, count);
-        if (count >= max_out) break;
-    }
-    return count;
+    for (int lane = 0; lane < GRIDS_NUM_LANES; lane++)
+        advance_pending_clock(&bi->pending[lane]);
 }
 
-static int advance_pending_note(PendingNoteOff *pending, uint32_t frames,
-                                uint8_t out_msgs[][3], int out_lens[],
-                                int max_out, int count)
+static void advance_pending_note(PendingNoteOff *pending, uint32_t frames)
 {
-    if (!pending->active) return count;
-
+    if (!pending->active) return;
     if (frames >= pending->frames_left) {
-        count = emit_note_message((uint8_t)(MIDI_NOTE_OFF | (pending->channel & 0x0Fu)),
-                                  pending->note, 0, out_msgs, out_lens, max_out, count);
+        emit_note((uint8_t)(MIDI_NOTE_OFF | (pending->channel & 0x0Fu)),
+                  pending->note, 0);
         pending->active = 0;
         pending->frames_left = 0;
     } else {
         pending->frames_left -= frames;
     }
-
-    return count;
 }
 
-static int advance_pending_notes(BranchageInstance *bi, uint32_t frames,
-                                 uint8_t out_msgs[][3], int out_lens[],
-                                 int max_out, int count)
+static void advance_pending_notes(BranchageInstance *bi, uint32_t frames)
 {
-    for (int lane = 0; lane < GRIDS_NUM_LANES; lane++) {
-        count = advance_pending_note(&bi->pending[lane], frames,
-                                     out_msgs, out_lens, max_out, count);
-        if (count >= max_out) break;
-    }
-    return count;
+    for (int lane = 0; lane < GRIDS_NUM_LANES; lane++)
+        advance_pending_note(&bi->pending[lane], frames);
 }
+
+/* ---------------------------------------------------------------------------
+ * Grid / branch helpers
+ * ------------------------------------------------------------------------- */
 
 static void mark_preview_dirty(BranchageInstance *bi)
 {
@@ -419,13 +404,9 @@ static uint8_t resolve_lane_note(BranchageInstance *bi, int lane)
     return bi->note[lane];
 }
 
-static int do_step(BranchageInstance *bi,
-                   uint32_t gate_frames,
-                   uint8_t gate_clocks,
-                   uint8_t out_msgs[][3], int out_lens[],
-                   int max_out)
+static void do_step(BranchageInstance *bi, uint32_t gate_frames, uint8_t gate_clocks)
 {
-    int count = 0;
+    static int g_logged_first_emit = 0;
 
     grids_tick(&bi->grids);
     if (bi->grids.step >= bi->step_length) {
@@ -435,17 +416,14 @@ static int do_step(BranchageInstance *bi,
     for (int lane = 0; lane < GRIDS_NUM_LANES; lane++) {
         PendingNoteOff *pending = &bi->pending[lane];
 
-        if (pending->active) {
-            count = flush_pending_note(pending, out_msgs, out_lens, max_out, count);
-            if (count >= max_out) return count;
-        }
+        if (pending->active)
+            flush_pending_note(pending);
 
         if (!grids_get_trigger(&bi->grids, lane)) continue;
 
         {
             uint8_t vel = grids_get_accent(&bi->grids, lane) ? VEL_ACCENT : VEL_NORMAL;
             uint8_t note = resolve_lane_note(bi, lane);
-            static int g_logged_first_emit = 0;
             if (!g_logged_first_emit) {
                 file_logf("branchage:first_emit lane=%d note=%u vel=%u step=%u",
                           lane,
@@ -455,9 +433,7 @@ static int do_step(BranchageInstance *bi,
                 g_logged_first_emit = 1;
             }
 
-            count = emit_note_message(MIDI_NOTE_ON, note, vel,
-                                      out_msgs, out_lens, max_out, count);
-            if (count > max_out) return max_out;
+            emit_note(MIDI_NOTE_ON, note, vel);
 
             pending->active = 1;
             pending->note = note;
@@ -466,8 +442,6 @@ static int do_step(BranchageInstance *bi,
             pending->clocks_left = gate_clocks;
         }
     }
-
-    return count;
 }
 
 static void refresh_preview_cache(BranchageInstance *bi)
@@ -522,6 +496,10 @@ static int write_preview_chunk(BranchageInstance *bi, int lane, int offset,
 
     return snprintf(buf, buf_len, "%s", chunk);
 }
+
+/* ---------------------------------------------------------------------------
+ * Instance lifecycle
+ * ------------------------------------------------------------------------- */
 
 static void *branchage_create_instance(const char *module_dir,
                                        const char *config_json)
@@ -579,121 +557,70 @@ static void branchage_destroy_instance(void *instance)
     free(instance);
 }
 
-static int branchage_process_midi(void *instance,
-                                  const uint8_t *in_msg, int in_len,
-                                  uint8_t out_msgs[][3], int out_lens[],
-                                  int max_out)
+/* ---------------------------------------------------------------------------
+ * MIDI input (on_midi)
+ * Handles transport messages. source is ignored — all sources are treated equally.
+ * Non-transport messages are passed through (not consumed).
+ * ------------------------------------------------------------------------- */
+
+static void branchage_on_midi(void *instance, const uint8_t *msg, int len, int source)
 {
     BranchageInstance *bi = (BranchageInstance *)instance;
 
-    if (!bi || in_len == 0) return 0;
+    (void)source;
 
-    if (in_msg[0] == 0xFAu) {  /* Start */
-        file_logf("branchage:process 0xFA sync=%u", (unsigned)bi->sync_mode);
+    if (!bi || len == 0) return;
+
+    if (msg[0] == 0xFAu) {  /* Start */
+        file_logf("branchage:on_midi 0xFA sync=%u", (unsigned)bi->sync_mode);
         grids_engine_reset(&bi->grids);
         reset_branch_engines(bi);
         bi->frames_until_tick = frames_per_step(current_sample_rate(), current_bpm(bi));
         bi->midi_clocks_until_tick = midi_clocks_per_step();
         bi->clock_running = 1;
-        {
-            int count = flush_all_notes(bi, out_msgs, out_lens, max_out, 0);
-            if (bi->sync_mode == 0 && count < max_out) {
-                count += do_step(bi,
-                                 frames_per_gate(current_sample_rate(), current_bpm(bi)),
-                                 midi_clocks_per_gate(),
-                                 out_msgs + count, out_lens + count, max_out - count);
-                bi->midi_clocks_until_tick = midi_clocks_per_step();
-            }
-            return count;
+        flush_all_notes(bi);
+        if (bi->sync_mode == 0) {
+            do_step(bi,
+                    frames_per_gate(current_sample_rate(), current_bpm(bi)),
+                    midi_clocks_per_gate());
+            bi->midi_clocks_until_tick = midi_clocks_per_step();
         }
+        return;
     }
-    if (in_msg[0] == 0xFBu) {  /* Continue */
-        file_logf("branchage:process 0xFB sync=%u", (unsigned)bi->sync_mode);
+    if (msg[0] == 0xFBu) {  /* Continue */
+        file_logf("branchage:on_midi 0xFB sync=%u", (unsigned)bi->sync_mode);
         bi->clock_running = 1;
-        return flush_all_notes(bi, out_msgs, out_lens, max_out, 0);
+        flush_all_notes(bi);
+        return;
     }
-    if (in_msg[0] == 0xF8u) {  /* Clock tick */
-        int count = 0;
-        if (bi->sync_mode != 0 || !bi->clock_running) return 0;
+    if (msg[0] == 0xF8u) {  /* Clock tick */
+        if (bi->sync_mode != 0 || !bi->clock_running) return;
         if (!bi->clock_message_mode) file_logf("branchage:first 0xF8");
         bi->clock_message_mode = 1;
 
-        count = advance_pending_clocks(bi, out_msgs, out_lens, max_out, count);
-        if (count >= max_out) return count;
+        advance_pending_clocks(bi);
 
         if (bi->midi_clocks_until_tick > 0u) bi->midi_clocks_until_tick--;
         if (bi->midi_clocks_until_tick == 0u) {
-            count += do_step(bi,
-                             frames_per_gate(current_sample_rate(), current_bpm(bi)),
-                             midi_clocks_per_gate(),
-                             out_msgs + count, out_lens + count, max_out - count);
+            do_step(bi,
+                    frames_per_gate(current_sample_rate(), current_bpm(bi)),
+                    midi_clocks_per_gate());
             bi->midi_clocks_until_tick = midi_clocks_per_step();
         }
-        return count;
+        return;
     }
-    if (in_msg[0] == 0xFCu) {  /* Stop */
-        file_logf("branchage:process 0xFC");
+    if (msg[0] == 0xFCu) {  /* Stop */
+        file_logf("branchage:on_midi 0xFC");
         bi->clock_running = 0;
-        return flush_all_notes(bi, out_msgs, out_lens, max_out, 0);
+        flush_all_notes(bi);
+        return;
     }
-    return 0;
+    /* All other messages are not consumed by this module. */
 }
 
-static int branchage_plugin_tick(void *instance,
-                                 int frames, int sample_rate,
-                                 uint8_t out_msgs[][3], int out_lens[],
-                                 int max_out)
-{
-    BranchageInstance *bi = (BranchageInstance *)instance;
-    uint32_t nf;
-    float bpm;
-    uint32_t fps;
-    uint32_t gate;
-    int count;
-
-    if (!bi) return 0;
-    if (!g_logged_first_tick) {
-        file_logf("branchage:first_tick sync=%u frames=%d sr=%d",
-                  (unsigned)bi->sync_mode,
-                  frames,
-                  sample_rate);
-        g_logged_first_tick = 1;
-    }
-
-    if (bi->sync_mode == 0 && g_host && g_host->get_clock_status) {
-        int status = g_host->get_clock_status();
-        if (status == MOVE_CLOCK_STATUS_STOPPED ||
-            status == MOVE_CLOCK_STATUS_UNAVAILABLE) {
-            bi->clock_running = 0;
-            return flush_all_notes(bi, out_msgs, out_lens, max_out, 0);
-        } else if (status == MOVE_CLOCK_STATUS_RUNNING) {
-            bi->clock_running = 1;
-        }
-    } else if (bi->sync_mode != 0) {
-        bi->clock_running = 1;
-    }
-
-    if (bi->sync_mode == 0 && bi->clock_message_mode) return 0;
-
-    bpm = current_bpm(bi);
-    fps = frames_per_step(sample_rate, bpm);
-    gate = frames_per_gate(sample_rate, bpm);
-    nf = (uint32_t)frames;
-
-    count = advance_pending_notes(bi, nf, out_msgs, out_lens, max_out, 0);
-    if (count >= max_out) return count;
-
-    if (!bi->clock_running) return count;
-
-    if (bi->frames_until_tick <= nf) {
-        uint32_t carry = nf - bi->frames_until_tick;
-        bi->frames_until_tick = fps > carry ? fps - carry : 1u;
-        return count + do_step(bi, gate, 0u, out_msgs + count, out_lens + count, max_out - count);
-    }
-
-    bi->frames_until_tick -= nf;
-    return count;
-}
+/* ---------------------------------------------------------------------------
+ * Parameter I/O
+ * ------------------------------------------------------------------------- */
 
 static void branchage_set_param(void *instance, const char *key, const char *val)
 {
@@ -904,17 +831,91 @@ static int branchage_get_param(void *instance, const char *key,
     return snprintf(buf, buf_len, "%.4f", v);
 }
 
-static midi_fx_api_v1_t g_api = {
-    .api_version      = MIDI_FX_API_VERSION,
+static int branchage_get_error(void *instance, char *buf, int buf_len)
+{
+    (void)instance;
+    if (buf && buf_len > 0) buf[0] = '\0';
+    return 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Audio render block — pure MIDI FX, no audio output.
+ * Uses frame count for internal timing tick (same role as the former tick()).
+ * ------------------------------------------------------------------------- */
+
+static void branchage_render_block(void *instance, int16_t *out, int frames)
+{
+    BranchageInstance *bi = (BranchageInstance *)instance;
+    uint32_t nf;
+    float bpm;
+    uint32_t fps;
+    uint32_t gate;
+
+    /* Zero audio output — this module produces no audio. */
+    if (out) memset(out, 0, (size_t)frames * 2 * sizeof(int16_t));
+
+    if (!bi) return;
+
+    if (!g_logged_first_tick) {
+        file_logf("branchage:first_render sync=%u frames=%d sr=%d",
+                  (unsigned)bi->sync_mode,
+                  frames,
+                  current_sample_rate());
+        g_logged_first_tick = 1;
+    }
+
+    /* In move-sync mode, check clock status from host. */
+    if (bi->sync_mode == 0 && g_host && g_host->get_clock_status) {
+        int status = g_host->get_clock_status();
+        if (status == MOVE_CLOCK_STATUS_STOPPED ||
+            status == MOVE_CLOCK_STATUS_UNAVAILABLE) {
+            bi->clock_running = 0;
+            flush_all_notes(bi);
+            return;
+        } else if (status == MOVE_CLOCK_STATUS_RUNNING) {
+            bi->clock_running = 1;
+        }
+    } else if (bi->sync_mode != 0) {
+        bi->clock_running = 1;
+    }
+
+    /* In move-sync mode with MIDI clock messages, timing is driven by on_midi. */
+    if (bi->sync_mode == 0 && bi->clock_message_mode) return;
+
+    bpm = current_bpm(bi);
+    fps = frames_per_step(current_sample_rate(), bpm);
+    gate = frames_per_gate(current_sample_rate(), bpm);
+    nf = (uint32_t)frames;
+
+    advance_pending_notes(bi, nf);
+
+    if (!bi->clock_running) return;
+
+    if (bi->frames_until_tick <= nf) {
+        uint32_t carry = nf - bi->frames_until_tick;
+        bi->frames_until_tick = fps > carry ? fps - carry : 1u;
+        do_step(bi, gate, 0u);
+    } else {
+        bi->frames_until_tick -= nf;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * Plugin API v2 table and entry point
+ * ------------------------------------------------------------------------- */
+
+static plugin_api_v2_t g_api = {
+    .api_version      = 2,
     .create_instance  = branchage_create_instance,
     .destroy_instance = branchage_destroy_instance,
-    .process_midi     = branchage_process_midi,
-    .tick             = branchage_plugin_tick,
+    .on_midi          = branchage_on_midi,
     .set_param        = branchage_set_param,
     .get_param        = branchage_get_param,
+    .get_error        = branchage_get_error,
+    .render_block     = branchage_render_block,
 };
 
-midi_fx_api_v1_t *move_midi_fx_init(const host_api_v1_t *host)
+plugin_api_v2_t *move_plugin_init_v2(const host_api_v1_t *host)
 {
     g_host = host;
     return &g_api;

@@ -17,6 +17,17 @@ Before writing code, inspect:
 - at least one existing module UI in the repo
 - the target module’s `module.json` structure if it already exists
 
+Key hardware facts to apply:
+- Knobs 1–8: CC 71–78 (relative, 1–63 CW, 65–127 CCW)
+- Jog wheel: CC 14 | Jog click: CC 3 (127=pressed)
+- Shift: CC 49 (127=held) | Back: CC 51 | Menu: CC 50
+- Pads: Notes 68–99 | Steps: Notes 16–31
+- Knob touch (capacitive): Notes 0–9 — filter with `if (data[1] < 10) return;`
+- Display: 128×64 px, 1-bit. Use `print(x, y, text, color)`, `fill_rect()`, `clear_screen()`
+- LED colors: `Black=0`, `White=120`, `Red=127`, `Blue=125`, `BrightGreen=8` (full palette in `constants.mjs`)
+- LED buffer limit: max ~60 LED commands per frame. Use progressive init (8 LEDs/frame) to avoid overflow.
+- Host param access: `host_module_get_param(key)` / `host_module_set_param(key, val)`
+
 Goal:
 Create a full Move-facing UI that feels native, compact, and consistent with Schwung.
 

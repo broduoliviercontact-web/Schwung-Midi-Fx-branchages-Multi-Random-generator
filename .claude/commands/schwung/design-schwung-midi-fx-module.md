@@ -41,6 +41,33 @@ Design the module as a Signal Chain MIDI FX component.
 
 Assume the module should behave like existing chainable MIDI FX modules unless there is a strong reason not to.
 
+**Standard MIDI FX capability block:**
+```json
+"capabilities": {
+    "midi_in": true,
+    "midi_out": true,
+    "chainable": true,
+    "component_type": "midi_fx"
+}
+```
+
+**Optional capability flags to consider:**
+| Flag | When to use |
+|------|-------------|
+| `"raw_midi": true` | Module needs unprocessed MIDI — skips velocity curve, aftertouch filter, and knob-touch note filter |
+| `"raw_ui": true` | Module takes full UI control — host won't intercept Back; module must call `host_return_to_menu()` |
+| `"claims_master_knob": true` | Module needs CC 79 (volume knob) for its own use |
+| `"skip_led_clear": true` | Module overlays on existing pad colors and must not have LEDs cleared on load |
+
+**Install path** for this `component_type`:
+`/data/UserData/schwung/modules/midi_fx/<id>/`
+
+**MIDI source modules** (modules that generate MIDI independently via `ui_chain.js`) use a patch entry like:
+```json
+"midi_source": { "module": "<id>" }
+```
+Chain will enter the source UI when a patch with this source loads. Back exits to chain view; Menu re-enters source UI.
+
 ### 3. Parameter Model
 Define the `ui_hierarchy` root level with:
 - `params`

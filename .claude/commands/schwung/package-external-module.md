@@ -79,8 +79,44 @@ List any current limitations.
 ### Version Note
 Provide a concise release note.
 
+## Install Paths by component_type
+
+The module store extracts to a category subdirectory based on `component_type`:
+
+| `component_type` | Install path |
+|------------------|-------------|
+| `midi_fx` | `modules/midi_fx/<id>/` |
+| `sound_generator` | `modules/sound_generators/<id>/` |
+| `audio_fx` | `modules/audio_fx/<id>/` |
+| `utility` | `modules/utilities/<id>/` |
+| `overtake` | `modules/overtake/<id>/` |
+| `tool` | `modules/tools/<id>/` |
+
+For manual drop-in, use the same path: `/data/UserData/schwung/modules/<category>/<id>/`.
+
+After copying files, call `host_rescan_modules()` from any Schwung JS context, or restart Schwung. No host recompile is needed.
+
+## Module Catalog Entry Format
+
+To list a module in the official Schwung catalog (`module-catalog.json`), the entry must follow this format:
+
+```json
+{
+    "id": "your-module-id",
+    "name": "Your Module Name",
+    "description": "One clear sentence describing what it does.",
+    "component_type": "midi_fx",
+    "latest_version": "1.0.0",
+    "download_url": "https://github.com/<org>/<repo>/releases/download/v1.0.0/<module-id>-module.tar.gz"
+}
+```
+
+The tarball must extract cleanly into a single folder named `<id>/` containing `module.json` and all required files. The module store uses `curl` to download and `tar -xzf` to extract.
+
 ## Guardrails
 - Do not package build junk.
 - Do not reference files that are not included.
 - Do not claim portability unless the release was structured for external installation.
 - Always include a post-install test checklist.
+- Match the install path to the module's `component_type`.
+- Verify the tarball extracts into exactly one folder with no intermediate wrapper directories.

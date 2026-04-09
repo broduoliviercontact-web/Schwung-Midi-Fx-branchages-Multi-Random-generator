@@ -13,6 +13,49 @@ Build a stable native MIDI FX implementation that:
 - is safe with note lifecycle and state restore
 - can be edited from the UI and chain context
 
+## Plugin API v2 (Required)
+
+All new modules must implement `move_plugin_init_v2`. The host tries v2 first, falls back to v1 (deprecated singleton).
+
+```c
+typedef struct plugin_api_v2 {
+    uint32_t api_version;              // Must be 2
+    void* (*create_instance)(const char *module_dir, const char *json_defaults);
+    void (*destroy_instance)(void *instance);
+    void (*on_midi)(void *instance, const uint8_t *msg, int len, int source);
+    void (*set_param)(void *instance, const char *key, const char *val);
+    int (*get_param)(void *instance, const char *key, char *buf, int buf_len);
+    int (*get_error)(void *instance, char *buf, int buf_len);
+    void (*render_block)(void *instance, int16_t *out_interleaved_lr, int frames);
+} plugin_api_v2_t;
+
+plugin_api_v2_t *move_plugin_init_v2(host_api_v1_t *host);
+```
+
+**`on_midi` source values:**
+- `0` — internal (Move pads, knobs, buttons)
+- `1` — external (USB-A connected devices)
+- `2` — host (injected by Schwung host)
+
+**Audio specs** (for modules that also render audio):
+- Sample rate: 44100 Hz
+- Block size: 128 frames (~3ms latency)
+- Format: Stereo interleaved int16 (`[L0, R0, L1, R1, ...]`)
+
+**Modulation callbacks** (optional, available when running in Signal Chain):
+
+```c
+// In host_api_v1_t — check for NULL before calling:
+int (*mod_emit_value)(void *ctx,
+                      const char *source_id, const char *target,
+                      const char *param, float signal, float depth,
+                      float offset, int bipolar, int enabled);
+void (*mod_clear_source)(void *ctx, const char *source_id);
+void *mod_host_ctx;
+```
+
+Use `mod_emit_value` to publish temporary modulation contributions without overwriting base parameter values. Always check the callback pointer is non-NULL before calling.
+
 ## Recommended Strategy
 Model the implementation after existing native MIDI FX modules in the repo.
 

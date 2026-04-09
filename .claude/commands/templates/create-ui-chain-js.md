@@ -16,6 +16,19 @@ Before writing code, inspect:
 - the target module’s `module.json`
 - the target module’s editable parameter surface
 
+`ui_chain.js` must set `globalThis.chain_ui` and must NOT override `globalThis.init` or `globalThis.tick`:
+
+```javascript
+globalThis.chain_ui = { init, tick, onMidiMessageInternal, onMidiMessageExternal };
+```
+
+Key facts:
+- Chain UI is entered when a patch loads this module as its MIDI source. Back exits to chain view; Menu re-enters.
+- Available host calls: `host_module_get_param(key)`, `host_module_set_param(key, val)`
+- Knobs 1–8: CC 71–78 (relative). Jog: CC 14. Jog click: CC 3. Shift: CC 49. Back: CC 51.
+- Display: 128×64, 1-bit. `print()`, `fill_rect()`, `clear_screen()`.
+- LED buffer: max ~60 commands/frame. Use progressive init if setting many LEDs at once.
+
 Goal:
 Create a compact chain-editing UI for Signal Chain use.
 

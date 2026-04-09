@@ -18,8 +18,30 @@ Before writing code, inspect:
 Your job:
 - Generate the contents of a `dsp/<module>.c` source file for the module.
 - Match the repo’s real native MIDI FX patterns instead of inventing a new architecture.
-- Infer the correct headers, entry points, and function signatures from the repo examples.
+- Implement Plugin API v2. The required entry point is `move_plugin_init_v2`.
 - Keep the implementation readable, direct, and maintainable.
+
+Plugin API v2 struct (implement all fields):
+
+```c
+typedef struct plugin_api_v2 {
+    uint32_t api_version;              // Must be 2
+    void* (*create_instance)(const char *module_dir, const char *json_defaults);
+    void (*destroy_instance)(void *instance);
+    void (*on_midi)(void *instance, const uint8_t *msg, int len, int source);
+    void (*set_param)(void *instance, const char *key, const char *val);
+    int (*get_param)(void *instance, const char *key, char *buf, int buf_len);
+    int (*get_error)(void *instance, char *buf, int buf_len);
+    void (*render_block)(void *instance, int16_t *out_interleaved_lr, int frames);
+} plugin_api_v2_t;
+```
+
+`on_midi` source values: `0` = internal, `1` = external, `2` = host-injected.
+`get_param` returns 0 on success, writes result into `buf`. Return -1 on unknown key.
+`render_block` is required but may be a no-op for pure MIDI FX (MIDI FX do not produce audio).
+`get_error` returns 0 if no error, writes message into `buf` otherwise.
+
+Audio specs (if render_block is implemented): 44100 Hz, 128 frames/block, stereo interleaved int16.
 
 Implementation requirements:
 - Define a clear per-instance state struct.
