@@ -36,7 +36,7 @@ ssh "${MOVE_USER}@${MOVE_HOST}" "mkdir -p ${MOVE_MODULES_DIR}/${MODULE_CATEGORY}
 # ── Copy files ───────────────────────────────────────────────────────────────
 scp src/module.json            "${DEST}/module.json"
 scp "$DSO"                     "${DEST}/dsp.so"
-scp src/ui/branchage_ui.js     "${DEST}/branchage_ui.js"
+scp src/ui/branchage_ui.js     "${DEST}/ui.js"
 
 echo ""
 echo "✓ Installed to ${MOVE_MODULES_DIR}/${MODULE_CATEGORY}/${MODULE_ID}/"

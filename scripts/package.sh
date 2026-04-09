@@ -13,6 +13,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Prevent macOS tar metadata files (._*) from leaking into release archives.
+export COPYFILE_DISABLE=1
+export COPY_EXTENDED_ATTRIBUTES_DISABLE=1
+
 MODULE_MANIFEST="src/module.json"
 UI_SOURCE="src/ui/branchage_ui.js"
 DSP_SOURCE="build/aarch64/dsp.so"
@@ -54,7 +58,9 @@ cp "${MODULE_MANIFEST}" "${STAGE_DIR}/module.json"
 cp "${DSP_SOURCE}" "${STAGE_DIR}/dsp.so"
 cp "${UI_SOURCE}" "${STAGE_DIR}/ui.js"
 
-tar -C "${DIST_DIR}" -czf "${ARCHIVE_PATH}" "${MODULE_ID}"
+find "${STAGE_DIR}" \( -name '.DS_Store' -o -name '._*' \) -delete
+
+tar --exclude='.DS_Store' --exclude='._*' -C "${DIST_DIR}" -czf "${ARCHIVE_PATH}" "${MODULE_ID}"
 
 echo "✓ Packaged ${MODULE_ID} v${MODULE_VERSION}"
 echo "  Stage dir: ${STAGE_DIR}"
