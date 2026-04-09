@@ -1,8 +1,7 @@
 'use strict';
 
 import {
-  decodeDelta,
-  isCapacitiveTouchMessage
+  decodeDelta
 } from '/data/UserData/schwung/shared/input_filter.mjs';
 
 const PAD_BASE = 68;
@@ -516,7 +515,7 @@ globalThis.tick = function () {
 
 globalThis.onMidiMessageInternal = function (data) {
   if (!data || data.length < 3) return;
-  if (isCapacitiveTouchMessage(data)) return;
+  if (data[1] < 10) return; // ignore knob capacitive touch notes
 
   const status = data[0];
   const b1 = data[1];
