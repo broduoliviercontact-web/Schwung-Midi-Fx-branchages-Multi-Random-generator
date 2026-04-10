@@ -11,7 +11,7 @@
 # Adjust CC_CROSS if your toolchain prefix differs.
 #
 # Output naming matches module.json:  "dsp": "dsp.so"
-# Entry point:  move_plugin_init_v2   (the only dlsym'd symbol)
+# Entry point:  move_midi_fx_init   (the only dlsym'd symbol)
 
 CC_NATIVE  := gcc
 CC_CROSS   := aarch64-linux-gnu-gcc
@@ -66,8 +66,8 @@ build/native/branchage_midi_fx_test: tests/branchage_midi_fx_test.c $(ALL_SRCS) 
 
 .PHONY: check-symbols
 check-symbols: build/native/dsp.so
-	@nm $< | grep move_plugin_init_v2 \
-	  && echo "OK: move_plugin_init_v2 exported" \
+	@nm $< | grep move_midi_fx_init \
+	  && echo "OK: move_midi_fx_init exported" \
 	  || echo "FAIL: entry point not found"
 
 # ---- clean ------------------------------------------------------------------

@@ -46,12 +46,10 @@ const MAIN_KNOB_PARAMS = {
 };
 
 const PARAMS_KNOB_PARAMS = {
-  71: 'steps',
-  72: 'bpm',
-  73: 'sync',
+  71: 'kick_branch_prob',
+  72: 'snare_branch_prob',
+  73: 'hat_branch_prob',
   74: 'kick_branch_prob',
-  75: 'snare_branch_prob',
-  76: 'hat_branch_prob',
 };
 
 const MAIN_PARAM_LIST = [

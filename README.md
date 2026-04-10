@@ -266,7 +266,7 @@ dist/branchage-module.tar.gz
 └── branchage/
     ├── module.json
     ├── dsp.so
-    └── branchage_ui.js
+    └── ui.js
 ```
 
 Release flow:
