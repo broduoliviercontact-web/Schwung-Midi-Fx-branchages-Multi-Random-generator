@@ -49,7 +49,7 @@ fi
 
 DIST_DIR="dist"
 STAGE_DIR="${DIST_DIR}/${MODULE_ID}"
-ARCHIVE_PATH="${DIST_DIR}/${MODULE_ID}-module.tar.gz"
+ARCHIVE_PATH="${DIST_DIR}/${MODULE_ID}-v${MODULE_VERSION}-module.tar.gz"
 
 rm -rf "${STAGE_DIR}" "${ARCHIVE_PATH}"
 mkdir -p "${STAGE_DIR}"
