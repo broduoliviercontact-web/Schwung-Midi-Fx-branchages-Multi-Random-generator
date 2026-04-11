@@ -239,9 +239,150 @@ Specify whether to create:
 ### Implementation Notes
 Provide concrete notes for coding.
 
+## ui.js vs ui_chain.js — When Each is Loaded
+
+This is the most critical distinction to get right before coding any UI.
+
+| File | When loaded | Exports |
+|------|-------------|---------|
+| `ui.js` | When user opens the module as a full-screen view (standalone/launcher) | `globalThis.init`, `globalThis.tick`, `globalThis.onMidiMessageInternal`, `globalThis.onMidiMessageExternal` |
+| `ui_chain.js` | When module sits in a Signal Chain MIDI FX slot and the user edits the chain | `globalThis.chain_ui = { init, tick, onMidiMessageInternal, onMidiMessageExternal }` |
+
+**Important:** In normal use, most users interact with a MIDI FX module *via the chain slot* — so `ui_chain.js` is typically the primary interaction surface. Do not assume users will open the full `ui.js` view. If navigation is needed, implement it in `ui_chain.js` too.
+
+`raw_ui: true` must be present in `module.json` for `ui.js` to load. Without it, Schwung renders the Shadow UI even if `ui.js` is present.
+
+---
+
+## Proven Jog Navigation Pattern (Branchage)
+
+Use this exact pattern for jog-wheel cursor navigation. Do not invent variants.
+
+```javascript
+const CC_JOG_WHEEL = 14;
+const CC_JOG_CLICK = 3;
+
+// State — focused is always a string key, never an integer index, never null
+const g = {
+  focused: 'first_param_key',  // initialize to first param in list
+  editing: false,
+  page: PAGE_MAIN,             // if multi-page
+};
+
+// Focus indicator — call in render for each param label
+function foc(key) {
+  return g.focused === key ? (g.editing ? '[' : '>') : ' ';
+}
+
+// Cursor movement with page wrapping
+function moveCursor(delta) {
+  const list = currentParamList();
+  const idx  = list.indexOf(g.focused);
+  const raw  = idx < 0 ? 0 : idx + delta;
+  if (raw < 0) {
+    cyclePage(-1);
+    const nl = currentParamList();
+    g.focused = nl[nl.length - 1];
+  } else if (raw >= list.length) {
+    cyclePage(1);
+    g.focused = currentParamList()[0];
+  } else {
+    g.focused = list[raw];
+  }
+}
+
+// In onMidiMessageInternal, inside type === 0xB0:
+if (b1 === CC_JOG_WHEEL) {
+  const d = decodeDelta(b2);
+  if (g.editing && g.focused) {
+    setParam(g.focused, g.params[g.focused] + paramDelta(g.focused, d));
+  } else {
+    moveCursor(d > 0 ? 1 : -1);
+  }
+  return;
+}
+
+if (b1 === CC_JOG_CLICK && b2 > 0) {
+  g.editing = !g.editing;
+  return;
+}
+```
+
+Status bar (always visible at bottom of screen):
+```javascript
+const mark = g.editing ? '[EDIT]' : '[ NAV]';
+print(0, 54, `${mark} ${g.focused}: ${dispVal(g.focused)}`, 1);
+```
+
+Usage in render:
+```javascript
+print(0, 10, `X${foc('map_x')}`, 1);  // shows "X>" when focused, "X[" when editing
+drawBar(16, 11, 108, 5, p.map_x);
+```
+
+**Rules:**
+- `g.focused` is always a string param key — never an integer, never `null` after init
+- `g.editing` starts `false`; knobs turning a param can set `editing = true`
+- `paramDelta` returns `1`/`-1` for int params, `delta * 0.005` for floats
+- This pattern works identically in both `ui.js` and `ui_chain.js`
+
+---
+
+## LED Behavior: ui.js vs ui_chain.js
+
+**In `ui.js`** — use `move_midi_internal_send` directly:
+```javascript
+function setLED(note, vel) {
+  move_midi_internal_send([0, 0x90, note, vel]);
+}
+```
+
+**In `ui_chain.js`** — use `sharedSetLED` from the shared module:
+```javascript
+import {
+  decodeDelta,
+  isCapacitiveTouchMessage,
+  setLED as sharedSetLED,
+} from '/data/UserData/schwung/shared/input_filter.mjs';
+
+function setLED(note, vel) { sharedSetLED(note, vel); }
+```
+
+> **Critical:** `move_midi_internal_send` does NOT work for pad LEDs in the chain UI context. Using it silently drops all LED updates — pads stay dark. Always use `sharedSetLED` in `ui_chain.js`.
+
+---
+
+## Capacitive Touch Filter
+
+In `ui.js` (manual):
+```javascript
+if (data[0] === 0x90 && data[1] < 10) return;  // filter knob capacitive touch
+```
+
+In `ui_chain.js` (shared helper — preferred):
+```javascript
+import { isCapacitiveTouchMessage } from '/data/UserData/schwung/shared/input_filter.mjs';
+if (isCapacitiveTouchMessage(data)) return;
+```
+
+Both filter note-on messages with note < 10. Neither affects CC messages. Never apply this filter to CC data.
+
+---
+
+## Deploy and Reload on Move
+
+After SCP'ing a new `ui.js` or `ui_chain.js`:
+- Navigate away from the module and back — Schwung re-evaluates JS on entry
+- If the UI still shows old behavior, Move has cached the old script in RAM → full power cycle required
+
+**Debug tip:** Change the title string (e.g. `'GRIDS v4'`) before deploying to confirm the new JS loaded. If the old title still appears after re-entering, restart Move.
+
+---
+
 ## Guardrails
 - Do not create a UI that requires memorizing too many hidden states.
 - Do not use pads just because they are available.
 - Do not overload LEDs with decorative behavior.
 - Keep chain UI smaller and more focused than full UI.
 - Prefer consistency with existing modules over experimental interaction design.
+- In `ui_chain.js`, always use `sharedSetLED` for pad LEDs — never `move_midi_internal_send`.
