@@ -22,11 +22,58 @@ Key hardware facts to apply:
 - Jog wheel: CC 14 | Jog click: CC 3 (127=pressed)
 - Shift: CC 49 (127=held) | Back: CC 51 | Menu: CC 50
 - Pads: Notes 68–99 | Steps: Notes 16–31
-- Knob touch (capacitive): Notes 0–9 — filter with `if (data[1] < 10) return;`
+- Knob touch (capacitive): Notes 0–9 — filter with `if (data[0] === 0x90 && data[1] < 10) return;`
 - Display: 128×64 px, 1-bit. Use `print(x, y, text, color)`, `fill_rect()`, `clear_screen()`
 - LED colors: `Black=0`, `White=120`, `Red=127`, `Blue=125`, `BrightGreen=8` (full palette in `constants.mjs`)
 - LED buffer limit: max ~60 LED commands per frame. Use progressive init (8 LEDs/frame) to avoid overflow.
 - Host param access: `host_module_get_param(key)` / `host_module_set_param(key, val)`
+- `raw_ui: true` must be in `module.json` for this file to load. Without it, Schwung renders the Shadow UI.
+- LEDs: use `move_midi_internal_send([0, 0x90, note, vel])` directly.
+
+**Proven jog navigation pattern (from Branchage — use this, do not invent variants):**
+```javascript
+import { decodeDelta } from '/data/UserData/schwung/shared/input_filter.mjs';
+
+const CC_JOG_WHEEL = 14;
+const CC_JOG_CLICK = 3;
+
+// g.focused = string key (always set on init, never null)
+// g.editing = bool (false on init)
+
+function foc(key) {
+  return g.focused === key ? (g.editing ? '[' : '>') : ' ';
+}
+function moveCursor(delta) {
+  const list = currentParamList();
+  const idx  = list.indexOf(g.focused);
+  const raw  = idx < 0 ? 0 : idx + delta;
+  if (raw < 0)              { cyclePage(-1); const nl = currentParamList(); g.focused = nl[nl.length - 1]; }
+  else if (raw >= list.length) { cyclePage(1);  g.focused = currentParamList()[0]; }
+  else                         { g.focused = list[raw]; }
+}
+// In onMidiMessageInternal inside type === 0xB0:
+if (b1 === CC_JOG_WHEEL) {
+  const d = decodeDelta(b2);
+  if (g.editing && g.focused) { setParam(g.focused, g.params[g.focused] + paramDelta(g.focused, d)); }
+  else                         { moveCursor(d > 0 ? 1 : -1); }
+  return;
+}
+if (b1 === CC_JOG_CLICK && b2 > 0) { g.editing = !g.editing; return; }
+```
+
+Status bar (always visible at y=54):
+```javascript
+const mark = g.editing ? '[EDIT]' : '[ NAV]';
+print(0, 54, `${mark} ${g.focused}: ${dispVal(g.focused)}`, 1);
+```
+
+Exports for full UI:
+```javascript
+globalThis.init = function() { ... };
+globalThis.tick = function() { ... };
+globalThis.onMidiMessageInternal = function(data) { ... };
+globalThis.onMidiMessageExternal = function(data) { ... };
+```
 
 Goal:
 Create a full Move-facing UI that feels native, compact, and consistent with Schwung.

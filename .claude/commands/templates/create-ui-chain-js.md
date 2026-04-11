@@ -29,6 +29,57 @@ Key facts:
 - Display: 128×64, 1-bit. `print()`, `fill_rect()`, `clear_screen()`.
 - LED buffer: max ~60 commands/frame. Use progressive init if setting many LEDs at once.
 
+**Critical — LED in chain UI:**
+Always use `sharedSetLED` from the shared module. `move_midi_internal_send` silently drops all LED updates in chain UI context.
+```javascript
+import {
+  decodeDelta,
+  isCapacitiveTouchMessage,
+  setLED as sharedSetLED,
+} from '/data/UserData/schwung/shared/input_filter.mjs';
+function setLED(note, vel) { sharedSetLED(note, vel); }
+```
+
+**Capacitive touch filter — use shared helper:**
+```javascript
+if (isCapacitiveTouchMessage(data)) return;
+```
+
+**Jog navigation — use this proven pattern:**
+```javascript
+const CC_JOG_WHEEL = 14;
+const CC_JOG_CLICK = 3;
+
+// s.focused = string key (never null after init, never an integer)
+// s.editing = bool (false on init)
+
+function foc(key) {
+  return s.focused === key ? (s.editing ? '[' : '>') : ' ';
+}
+function moveCursor(delta) {
+  const list = currentParamList();
+  const idx  = list.indexOf(s.focused);
+  const raw  = idx < 0 ? 0 : idx + delta;
+  // clamp or wrap to next page depending on design
+  s.focused = list[Math.max(0, Math.min(raw, list.length - 1))];
+  s.dirty = true;
+}
+// In onMidiMessageInternal inside 0xB0:
+if (b1 === CC_JOG_WHEEL) {
+  const d = decodeDelta(b2);
+  if (s.editing) { setParam(s.focused, s.params[s.focused] + d * 0.005); }
+  else           { moveCursor(d > 0 ? 1 : -1); }
+  return;
+}
+if (b1 === CC_JOG_CLICK && b2 > 0) { s.editing = !s.editing; s.dirty = true; return; }
+```
+
+Status bar:
+```javascript
+const mark = s.editing ? '[EDIT]' : '[ NAV]';
+print(0, 54, `${mark} ${s.focused}: ${dispVal(s.focused)}`, 1);
+```
+
 Goal:
 Create a compact chain-editing UI for Signal Chain use.
 
