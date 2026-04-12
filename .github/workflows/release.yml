@@ -24,10 +24,19 @@ jobs:
       - name: Build and package module
         run: ./scripts/package.sh docker
 
+      - name: Read module identity
+        id: module
+        run: |
+          ID=$(python3 -c "import json; d=json.load(open('src/module.json')); print(d['id'])")
+          VERSION=$(python3 -c "import json; d=json.load(open('src/module.json')); print(d['version'])")
+          echo "id=${ID}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tarball=${ID}-v${VERSION}-module.tar.gz" >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/branchage-module.tar.gz
+          files: dist/${{ steps.module.outputs.tarball }}
 
       - name: Update release.json on main
         env:
@@ -36,22 +45,29 @@ jobs:
         run: |
           set -euo pipefail
 
-          VERSION="${TAG_NAME#v}"
-          DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG_NAME}/branchage-module.tar.gz"
+          ID="${{ steps.module.outputs.id }}"
+          VERSION="${{ steps.module.outputs.version }}"
+          TARBALL="${{ steps.module.outputs.tarball }}"
+          DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG_NAME}/${TARBALL}"
 
           git fetch origin main
           git switch main || git switch --create main --track origin/main
           git pull --ff-only origin main
 
-          cat > release.json <<EOF
-          {
-              "id": "branchage",
+          python3 - <<EOF
+          import json
+          data = {
+              "id": "${ID}",
               "name": "Branchage",
               "description": "Grids drum maps with per-lane Branches-style note branching",
               "component_type": "midi_fx",
-              "latest_version": "${VERSION}",
+              "version": "${VERSION}",
               "download_url": "${DOWNLOAD_URL}"
           }
+          with open("release.json", "w") as f:
+              json.dump(data, f, indent=4)
+              f.write("\n")
+          print(json.dumps(data, indent=4))
           EOF
 
           git config user.name "github-actions[bot]"
