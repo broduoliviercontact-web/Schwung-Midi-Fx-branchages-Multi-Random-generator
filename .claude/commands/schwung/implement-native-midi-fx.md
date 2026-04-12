@@ -103,14 +103,67 @@ If the module generates timed notes or CC:
 - define reset rules on stop / mode change / empty note state
 
 ### 4. Implement Parameter I/O
+
+> **Rule — NEVER write to `/tmp/` on Move.** `/tmp` is on the root filesystem which is read-only or full. Any write to `/tmp/` silently fails or crashes. Write all files to `/data/UserData/` only.
+
 Implement:
-- parameter setting
-- parameter reading
+- parameter setting (`set_param`)
+- parameter reading (`get_param`)
 - optional error/warning reporting
 - `chain_params` exposure when needed
-- serialized state when needed
 
-> **Critical — no save_state/load_state in the API:** The `midi_fx_api_v1_t` struct does NOT have `save_state` or `load_state` callbacks. The host will never call them. State recall goes entirely through `set_param`/`get_param` via the chain host. Do not implement separate save/load functions and expect the host to call them — nothing will happen.
+> **Critical — no save_state/load_state in the API:** The `midi_fx_api_v1_t` struct does NOT have `save_state` or `load_state` callbacks. The host will never call them. State recall goes entirely through `set_param`/`get_param` via the chain host. Do not implement separate save/load functions expecting the host to call them — nothing will happen.
+
+#### How State Restoration Works
+
+The chain host restores state by calling `set_param(key, val)` for every parameter, one by one, after `create_instance`. Your module must be able to reconstruct its full state from those calls alone.
+
+`get_param` must serialize the current value into `buf` using `snprintf` — never `sprintf`:
+
+```c
+int get_param(void *instance, const char *key, char *buf, int buf_len) {
+    my_fx_t *fx = (my_fx_t *)instance;
+    if (strcmp(key, "rate") == 0)
+        return snprintf(buf, buf_len, "%d", fx->rate);
+    if (strcmp(key, "amount") == 0)
+        return snprintf(buf, buf_len, "%.4f", fx->amount);
+    return 0;  // unknown key — return 0, not -1
+}
+```
+
+`set_param` must parse and clamp every param it knows, and silently ignore unknown keys:
+
+```c
+void set_param(void *instance, const char *key, const char *val) {
+    my_fx_t *fx = (my_fx_t *)instance;
+    if (strcmp(key, "rate") == 0) {
+        int v = atoi(val);
+        fx->rate = v < 1 ? 1 : v > 32 ? 32 : v;
+    } else if (strcmp(key, "amount") == 0) {
+        float v = atof(val);
+        fx->amount = v < 0.f ? 0.f : v > 1.f ? 1.f : v;
+    }
+    // unknown keys: silently ignored — required for forward compatibility
+}
+```
+
+`create_instance` receives `json_defaults` — parse it to seed initial values, then `set_param` overrides them on restore:
+
+```c
+void *create_instance(const char *module_dir, const char *json_defaults) {
+    my_fx_t *fx = calloc(1, sizeof(my_fx_t));
+    fx->rate   = 4;    // safe fallback defaults
+    fx->amount = 0.5f;
+    // optionally parse json_defaults here for non-zero defaults
+    return fx;
+}
+```
+
+Rules:
+- `get_param` uses `snprintf`, never `sprintf` — buffer overflow is real
+- `set_param` silently ignores unknown keys — required for forward compat
+- State must be fully recoverable from `set_param` calls alone
+- No file I/O for state — chain host owns persistence
 
 ### 5. Manage Note Lifecycle Safely
 Always protect against:

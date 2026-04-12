@@ -349,6 +349,9 @@ If a choice is unclear, prefer:
 
 ## Things To Avoid
 
+- writing to `/tmp/` — root filesystem is read-only or full on Move, always use `/data/UserData/`
+- implementing `save_state`/`load_state` — they don't exist in the API, state goes through `set_param`/`get_param` only
+- using `sprintf` in `get_param` — use `snprintf` with the provided buffer length
 - inventing undocumented Schwung APIs
 - inventing unsupported manifest fields
 - feature creep in first implementation

@@ -72,8 +72,9 @@ Parameter requirements:
 - Implement parameter setters and getters.
 - Clamp numeric values.
 - Validate enums.
-- Support state serialization if the module needs custom restore behavior.
+- State restoration goes through `set_param`/`get_param` only — there is no `save_state`/`load_state` callback. The chain host calls `set_param` for each param on restore. `get_param` must serialize current state with `snprintf` (never `sprintf`). `set_param` must silently ignore unknown keys.
 - Expose `chain_params` only if it matches real editable controls.
+- NEVER write to `/tmp/` — it is read-only or full on Move. Write to `/data/UserData/` only.
 
 Coding rules:
 - Prefer boring reliability over cleverness.
