@@ -32,11 +32,17 @@ jobs:
           echo "id=${ID}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tarball=${ID}-v${VERSION}-module.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "tarball_unversioned=${ID}-module.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Create unversioned copy for Schwung installer
+        run: cp dist/${{ steps.module.outputs.tarball }} dist/${{ steps.module.outputs.tarball_unversioned }}
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/${{ steps.module.outputs.tarball }}
+          files: |
+            dist/${{ steps.module.outputs.tarball }}
+            dist/${{ steps.module.outputs.tarball_unversioned }}
 
       - name: Update release.json on main
         env:
@@ -48,7 +54,8 @@ jobs:
           ID="${{ steps.module.outputs.id }}"
           VERSION="${{ steps.module.outputs.version }}"
           TARBALL="${{ steps.module.outputs.tarball }}"
-          DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG_NAME}/${TARBALL}"
+          TARBALL_UNVERSIONED="${ID}-module.tar.gz"
+          DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG_NAME}/${TARBALL_UNVERSIONED}"
 
           git fetch origin main
           git switch main || git switch --create main --track origin/main
