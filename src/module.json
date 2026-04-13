@@ -2,7 +2,7 @@
     "id": "branchage",
     "name": "Branchage",
     "abbrev": "BRNC",
-    "version": "0.4.0",
+    "version": "0.4.1",
     "description": "Grids drum maps with per-lane Branches-style note branching",
     "author": "Mutable Instruments ideas / port for Schwung Move",
     "api_version": 2,
@@ -37,6 +37,12 @@
         { "key": "snare_branch_enabled", "name": "S Branch On", "type": "int", "min": 0, "max": 1, "default": 1, "step": 1 },
         { "key": "hat_branch_prob", "name": "H Branch Prob", "type": "float", "min": 0.0, "max": 1.0, "default": 0.30, "step": 0.01 },
         { "key": "hat_branch_note", "name": "H Branch Note", "type": "int", "min": -1, "max": 127, "default": 46, "step": 1 },
-        { "key": "hat_branch_enabled", "name": "H Branch On", "type": "int", "min": 0, "max": 1, "default": 1, "step": 1 }
+        { "key": "hat_branch_enabled", "name": "H Branch On", "type": "int", "min": 0, "max": 1, "default": 1, "step": 1 },
+        { "key": "kick_branch_rand_low",   "name": "K Rand Lo", "type": "int", "min": 0, "max": 127, "default": 36, "step": 1 },
+        { "key": "kick_branch_rand_high",  "name": "K Rand Hi", "type": "int", "min": 0, "max": 127, "default": 84, "step": 1 },
+        { "key": "snare_branch_rand_low",  "name": "S Rand Lo", "type": "int", "min": 0, "max": 127, "default": 36, "step": 1 },
+        { "key": "snare_branch_rand_high", "name": "S Rand Hi", "type": "int", "min": 0, "max": 127, "default": 84, "step": 1 },
+        { "key": "hat_branch_rand_low",    "name": "H Rand Lo", "type": "int", "min": 0, "max": 127, "default": 36, "step": 1 },
+        { "key": "hat_branch_rand_high",   "name": "H Rand Hi", "type": "int", "min": 0, "max": 127, "default": 84, "step": 1 }
     ]
 }

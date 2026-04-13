@@ -59,6 +59,9 @@ const MAIN_PARAM_LIST = [
 const NOTES_PARAM_LIST = [
   'kick_note', 'snare_note', 'hat_note',
   'steps', 'sync', 'bpm',
+  'kick_branch_rand_low',  'kick_branch_rand_high',
+  'snare_branch_rand_low', 'snare_branch_rand_high',
+  'hat_branch_rand_low',   'hat_branch_rand_high',
 ];
 
 const BRANCH_PARAM_LIST = [
@@ -67,10 +70,12 @@ const BRANCH_PARAM_LIST = [
   'hat_branch_prob',   'hat_branch_note',   'hat_branch_enabled',
 ];
 
-const BRANCH_PROB_KEYS    = ['kick_branch_prob',    'snare_branch_prob',    'hat_branch_prob'];
-const BRANCH_NOTE_KEYS    = ['kick_branch_note',    'snare_branch_note',    'hat_branch_note'];
-const BRANCH_ENABLED_KEYS = ['kick_branch_enabled', 'snare_branch_enabled', 'hat_branch_enabled'];
-const LANE_LABELS         = ['K', 'S', 'H'];
+const BRANCH_PROB_KEYS     = ['kick_branch_prob',    'snare_branch_prob',    'hat_branch_prob'];
+const BRANCH_NOTE_KEYS     = ['kick_branch_note',    'snare_branch_note',    'hat_branch_note'];
+const BRANCH_ENABLED_KEYS  = ['kick_branch_enabled', 'snare_branch_enabled', 'hat_branch_enabled'];
+const BRANCH_RAND_LOW_KEYS = ['kick_branch_rand_low',  'snare_branch_rand_low',  'hat_branch_rand_low'];
+const BRANCH_RAND_HI_KEYS  = ['kick_branch_rand_high', 'snare_branch_rand_high', 'hat_branch_rand_high'];
+const LANE_LABELS          = ['K', 'S', 'H'];
 
 const PARAM_DEFAULTS = {
   map_x:               0.5,
@@ -85,15 +90,21 @@ const PARAM_DEFAULTS = {
   steps:               16,
   sync:                0,
   bpm:                 120,
-  kick_branch_prob:    0.15,
-  kick_branch_note:    35,
-  kick_branch_enabled: 1,
-  snare_branch_prob:   0.20,
-  snare_branch_note:   40,
-  snare_branch_enabled:1,
-  hat_branch_prob:     0.30,
-  hat_branch_note:     46,
-  hat_branch_enabled:  1,
+  kick_branch_prob:      0.15,
+  kick_branch_note:      35,
+  kick_branch_enabled:   1,
+  snare_branch_prob:     0.20,
+  snare_branch_note:     40,
+  snare_branch_enabled:  1,
+  hat_branch_prob:       0.30,
+  hat_branch_note:       46,
+  hat_branch_enabled:    1,
+  kick_branch_rand_low:  36,
+  kick_branch_rand_high: 84,
+  snare_branch_rand_low: 36,
+  snare_branch_rand_high:84,
+  hat_branch_rand_low:   36,
+  hat_branch_rand_high:  84,
 };
 
 /* ── State ─────────────────────────────────────────────────────────────── */
@@ -118,6 +129,7 @@ function clamp01(v)      { return v < 0 ? 0 : v > 1 ? 1 : v; }
 function isNote(key)     { return key.endsWith('_note'); }
 function isToggle(key)   { return key.endsWith('_enabled'); }
 function isIntStep(key)  { return key === 'steps' || key === 'bpm'; }
+function isRandBound(key){ return key.endsWith('_rand_low') || key.endsWith('_rand_high'); }
 
 function clampParam(key, value) {
   if (key === 'steps')          { const n = Math.round(value); return n < 1  ? 1  : n > 32  ? 32  : n; }
@@ -127,19 +139,20 @@ function clampParam(key, value) {
   if (BRANCH_NOTE_KEYS.includes(key)) {
     const n = Math.round(value); return n < -1 ? -1 : n > 127 ? 127 : n;
   }
+  if (isRandBound(key))         { const n = Math.round(value); return n < 0 ? 0 : n > 127 ? 127 : n; }
   if (isNote(key))              { const n = Math.round(value); return n < 0 ? 0 : n > 127 ? 127 : n; }
   return clamp01(value);
 }
 
 function formatParam(key, value) {
   if (key === 'sync')    return value > 0 ? 'internal' : 'move';
-  if (isIntStep(key) || isNote(key) || isToggle(key) || BRANCH_NOTE_KEYS.includes(key))
+  if (isIntStep(key) || isNote(key) || isToggle(key) || isRandBound(key) || BRANCH_NOTE_KEYS.includes(key))
     return String(Math.round(value));
   return value.toFixed(4);
 }
 
 function jogDelta(key, d) {
-  if (isIntStep(key) || isNote(key) || isToggle(key) || key === 'sync' || BRANCH_NOTE_KEYS.includes(key))
+  if (isIntStep(key) || isNote(key) || isToggle(key) || isRandBound(key) || key === 'sync' || BRANCH_NOTE_KEYS.includes(key))
     return d > 0 ? 1 : -1;
   return d * 0.005;
 }
@@ -149,7 +162,7 @@ function dispVal(key) {
   if (key === 'sync')                          return v > 0 ? 'INT' : 'MOV';
   if (isToggle(key))                           return v > 0 ? 'ON' : 'OF';
   if (BRANCH_NOTE_KEYS.includes(key))          return Math.round(v) === -1 ? 'RND' : String(Math.round(v));
-  if (isIntStep(key) || isNote(key))           return String(Math.round(v));
+  if (isIntStep(key) || isNote(key) || isRandBound(key)) return String(Math.round(v));
   return v.toFixed(2);
 }
 
@@ -258,14 +271,23 @@ function renderMainPage() {
 function renderNotesPage() {
   print(0, 0, 'BRANCH 3/3', 1);
 
-  print(0,  10, `K${foc('kick_note')}${dispVal('kick_note')}`, 1);
-  print(46, 10, `S${foc('snare_note')}${dispVal('snare_note')}`, 1);
-  print(92, 10, `H${foc('hat_note')}${dispVal('hat_note')}`, 1);
+  print(0,  9, `K${foc('kick_note')}${dispVal('kick_note')}`, 1);
+  print(46, 9, `S${foc('snare_note')}${dispVal('snare_note')}`, 1);
+  print(92, 9, `H${foc('hat_note')}${dispVal('hat_note')}`, 1);
 
-  print(0,  26, `ST${foc('steps')}${dispVal('steps')}`, 1);
+  print(0,  18, `${foc('steps')}ST ${dispVal('steps')}`, 1);
+  print(52, 18, `${foc('sync')}SY ${dispVal('sync')}`, 1);
+  print(88, 18, `${foc('bpm')}BP ${dispVal('bpm')}`, 1);
 
-  print(0,  42, `SY${foc('sync')}${dispVal('sync')}`, 1);
-  print(64, 42, `BP${foc('bpm')}${dispVal('bpm')}`, 1);
+  /* rand range per lane */
+  const rrows = [27, 36, 45];
+  for (let i = 0; i < 3; i++) {
+    const lk = BRANCH_RAND_LOW_KEYS[i];
+    const hk = BRANCH_RAND_HI_KEYS[i];
+    const y  = rrows[i];
+    print(0,  y, `${LANE_LABELS[i]}RND${foc(lk)}${dispVal(lk)}`, 1);
+    print(70, y, `>${foc(hk)}${dispVal(hk)}`, 1);
+  }
 
   const mark = s.editing ? '[EDIT]' : '[ NAV]';
   print(0, 54, `${mark} ${s.focused}: ${dispVal(s.focused)}`, 1);
@@ -366,7 +388,7 @@ function onMidiMessageInternal(data) {
       const map = s.page === PAGE_BRANCH ? KNOB_PARAMS_BRANCH : (s.page === PAGE_MAIN ? KNOB_PARAMS : null);
       if (map && map[b1]) {
         const key   = map[b1];
-        const delta = decodeDelta(b2) * (isNote(key) || BRANCH_NOTE_KEYS.includes(key) ? 1 : 0.01);
+        const delta = decodeDelta(b2) * (isNote(key) || isRandBound(key) || BRANCH_NOTE_KEYS.includes(key) ? 1 : 0.01);
         setParam(key, s.params[key] + delta);
         s.focused = key;
         s.editing = true;
