@@ -1,8 +1,9 @@
 /**
- * ui_chain.js — Branchage compact chain UI (2 pages)
+ * ui_chain.js — Branchage compact chain UI (3 pages)
  *
  * Page 1: X, Y, Kick density, Snare density, Hat density, Chaos
- * Page 2: Steps, Sync, BPM
+ * Page 2: Per-lane branch prob / note / enabled (K, S, H)
+ * Page 3: Kick note, Snare note, Hat note, Steps, Sync, BPM
  *
  * Jog wheel navigates, jog click toggles edit mode.
  * Pads show X/Y glow. Cursor wraps between pages.
@@ -23,7 +24,9 @@ const CC_JOG_WHEEL = 14;
 const CC_JOG_CLICK = 3;
 const FLASH_TICKS  = 5;
 const PAGE_MAIN    = 0;
-const PAGE_PARAMS  = 1;
+const PAGE_BRANCH  = 1;
+const PAGE_NOTES   = 2;
+const NUM_PAGES    = 3;
 
 const PAD_BRIGHT_NEAR = 0.07;
 const PAD_BRIGHT_MED  = 0.22;
@@ -44,24 +47,44 @@ const MAIN_PARAM_LIST = [
   'randomness',
 ];
 
-const PARAMS_PARAM_LIST = [
+const NOTES_PARAM_LIST = [
+  'kick_note', 'snare_note', 'hat_note',
   'steps', 'sync', 'bpm',
 ];
 
+const BRANCH_PARAM_LIST = [
+  'kick_branch_prob',  'kick_branch_note',  'kick_branch_enabled',
+  'snare_branch_prob', 'snare_branch_note', 'snare_branch_enabled',
+  'hat_branch_prob',   'hat_branch_note',   'hat_branch_enabled',
+];
+
+const BRANCH_PROB_KEYS    = ['kick_branch_prob',    'snare_branch_prob',    'hat_branch_prob'];
+const BRANCH_NOTE_KEYS    = ['kick_branch_note',    'snare_branch_note',    'hat_branch_note'];
+const BRANCH_ENABLED_KEYS = ['kick_branch_enabled', 'snare_branch_enabled', 'hat_branch_enabled'];
+const LANE_LABELS         = ['K', 'S', 'H'];
+
 const PARAM_DEFAULTS = {
-  map_x:         0.5,
-  map_y:         0.5,
-  density_kick:  0.5,
-  density_snare: 0.5,
-  density_hat:   0.5,
-  randomness:    0.0,
-  steps:         16,
-  sync:          0,
-  bpm:           120,
-  // read-only — for flash indicators
-  kick_note:     36,
-  snare_note:    38,
-  hat_note:      42,
+  map_x:               0.5,
+  map_y:               0.5,
+  density_kick:        0.5,
+  density_snare:       0.5,
+  density_hat:         0.5,
+  randomness:          0.0,
+  kick_note:           36,
+  snare_note:          38,
+  hat_note:            42,
+  steps:               16,
+  sync:                0,
+  bpm:                 120,
+  kick_branch_prob:    0.15,
+  kick_branch_note:    35,
+  kick_branch_enabled: 1,
+  snare_branch_prob:   0.20,
+  snare_branch_note:   40,
+  snare_branch_enabled:1,
+  hat_branch_prob:     0.30,
+  hat_branch_note:     46,
+  hat_branch_enabled:  1,
 };
 
 /* ── State ─────────────────────────────────────────────────────────────── */
@@ -71,6 +94,7 @@ const s = {
   page:          PAGE_MAIN,
   step:          0,
   flash:         [0, 0, 0],
+  branchFlash:   [0, 0, 0],
   focused:       'map_x',
   editing:       false,
   dirty:         true,
@@ -81,30 +105,42 @@ const s = {
 
 /* ── Param helpers ─────────────────────────────────────────────────────── */
 
-function clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
+function clamp01(v)      { return v < 0 ? 0 : v > 1 ? 1 : v; }
+function isNote(key)     { return key.endsWith('_note'); }
+function isToggle(key)   { return key.endsWith('_enabled'); }
+function isIntStep(key)  { return key === 'steps' || key === 'bpm'; }
 
 function clampParam(key, value) {
-  if (key === 'steps') { const n = Math.round(value); return n < 1 ? 1 : n > 32 ? 32 : n; }
-  if (key === 'bpm')   { const n = Math.round(value); return n < 40 ? 40 : n > 240 ? 240 : n; }
-  if (key === 'sync')  { return Math.round(value) !== 0 ? 1 : 0; }
+  if (key === 'steps')          { const n = Math.round(value); return n < 1  ? 1  : n > 32  ? 32  : n; }
+  if (key === 'bpm')            { const n = Math.round(value); return n < 40 ? 40 : n > 240 ? 240 : n; }
+  if (key === 'sync')           { return Math.round(value) !== 0 ? 1 : 0; }
+  if (isToggle(key))            { return Math.round(value) !== 0 ? 1 : 0; }
+  if (BRANCH_NOTE_KEYS.includes(key)) {
+    const n = Math.round(value); return n < -1 ? -1 : n > 127 ? 127 : n;
+  }
+  if (isNote(key))              { const n = Math.round(value); return n < 0 ? 0 : n > 127 ? 127 : n; }
   return clamp01(value);
 }
 
 function formatParam(key, value) {
-  if (key === 'steps' || key === 'bpm') return String(Math.round(value));
-  if (key === 'sync') return value > 0 ? 'internal' : 'move';
+  if (key === 'sync')    return value > 0 ? 'internal' : 'move';
+  if (isIntStep(key) || isNote(key) || isToggle(key) || BRANCH_NOTE_KEYS.includes(key))
+    return String(Math.round(value));
   return value.toFixed(4);
 }
 
 function jogDelta(key, d) {
-  if (key === 'steps' || key === 'bpm' || key === 'sync') return d > 0 ? 1 : -1;
+  if (isIntStep(key) || isNote(key) || isToggle(key) || key === 'sync' || BRANCH_NOTE_KEYS.includes(key))
+    return d > 0 ? 1 : -1;
   return d * 0.005;
 }
 
 function dispVal(key) {
   const v = s.params[key];
-  if (key === 'steps' || key === 'bpm') return String(Math.round(v));
-  if (key === 'sync') return Math.round(v) === 0 ? 'MOV' : 'INT';
+  if (key === 'sync')                          return v > 0 ? 'INT' : 'MOV';
+  if (isToggle(key))                           return v > 0 ? 'ON' : 'OF';
+  if (BRANCH_NOTE_KEYS.includes(key))          return Math.round(v) === -1 ? 'RND' : String(Math.round(v));
+  if (isIntStep(key) || isNote(key))           return String(Math.round(v));
   return v.toFixed(2);
 }
 
@@ -118,11 +154,13 @@ function setParam(key, value) {
 /* ── Navigation ─────────────────────────────────────────────────────────── */
 
 function currentParamList() {
-  return s.page === PAGE_PARAMS ? PARAMS_PARAM_LIST : MAIN_PARAM_LIST;
+  if (s.page === PAGE_BRANCH) return BRANCH_PARAM_LIST;
+  if (s.page === PAGE_NOTES)  return NOTES_PARAM_LIST;
+  return MAIN_PARAM_LIST;
 }
 
 function cyclePage(delta) {
-  s.page    = (s.page + delta + 2) % 2;
+  s.page    = (s.page + delta + NUM_PAGES) % NUM_PAGES;
   s.editing = false;
 }
 
@@ -187,7 +225,7 @@ function renderMainPage() {
   const hDot    = s.flash[2] > 0 ? '*' : '.';
   const stepNum = String(s.step + 1).padStart(2, '0');
 
-  print(0,   0, 'BRANCH 1/2', 1);
+  print(0,   0, 'BRANCH 1/3', 1);
   print(76,  0, `K${kDot}S${sDot}H${hDot}`, 1);
   print(110, 0, stepNum, 1);
 
@@ -208,13 +246,38 @@ function renderMainPage() {
   print(0, 54, `${mark} ${s.focused}: ${dispVal(s.focused)}`, 1);
 }
 
-function renderParamsPage() {
-  print(0, 0, 'BRANCH 2/2', 1);
+function renderNotesPage() {
+  print(0, 0, 'BRANCH 3/3', 1);
 
-  print(0, 18, `ST${foc('steps')}${dispVal('steps')}`, 1);
+  print(0,  10, `K${foc('kick_note')}${dispVal('kick_note')}`, 1);
+  print(46, 10, `S${foc('snare_note')}${dispVal('snare_note')}`, 1);
+  print(92, 10, `H${foc('hat_note')}${dispVal('hat_note')}`, 1);
 
-  print(0,  36, `SY${foc('sync')}${dispVal('sync')}`, 1);
-  print(64, 36, `BP${foc('bpm')}${dispVal('bpm')}`, 1);
+  print(0,  26, `ST${foc('steps')}${dispVal('steps')}`, 1);
+
+  print(0,  42, `SY${foc('sync')}${dispVal('sync')}`, 1);
+  print(64, 42, `BP${foc('bpm')}${dispVal('bpm')}`, 1);
+
+  const mark = s.editing ? '[EDIT]' : '[ NAV]';
+  print(0, 54, `${mark} ${s.focused}: ${dispVal(s.focused)}`, 1);
+}
+
+function renderBranchPage() {
+  print(0, 0, 'BRANCH 2/3', 1);
+
+  const rows = [10, 26, 42];
+  for (let i = 0; i < 3; i++) {
+    const pk = BRANCH_PROB_KEYS[i];
+    const nk = BRANCH_NOTE_KEYS[i];
+    const ek = BRANCH_ENABLED_KEYS[i];
+    const y  = rows[i];
+    const dot = s.branchFlash[i] > 0 ? '*' : '.';
+
+    print(0, y, `${LANE_LABELS[i]}${dot}${foc(pk)}`, 1);
+    drawBar(20, y + 1, 56, 5, s.params[pk]);
+    print(80, y, `${foc(nk)}${dispVal(nk)}`, 1);
+    print(106, y, `${foc(ek)}${dispVal(ek)}`, 1);
+  }
 
   const mark = s.editing ? '[EDIT]' : '[ NAV]';
   print(0, 54, `${mark} ${s.focused}: ${dispVal(s.focused)}`, 1);
@@ -222,8 +285,9 @@ function renderParamsPage() {
 
 function render() {
   clear_screen();
-  if (s.page === PAGE_PARAMS) renderParamsPage();
-  else                        renderMainPage();
+  if      (s.page === PAGE_NOTES)  renderNotesPage();
+  else if (s.page === PAGE_BRANCH) renderBranchPage();
+  else                             renderMainPage();
 }
 
 /* ── Pad LEDs ───────────────────────────────────────────────────────────── */
@@ -265,7 +329,8 @@ function init() {
 
 function tick() {
   for (let i = 0; i < 3; i++) {
-    if (s.flash[i] > 0) { s.flash[i]--; s.dirty = true; }
+    if (s.flash[i]       > 0) { s.flash[i]--;       s.dirty = true; }
+    if (s.branchFlash[i] > 0) { s.branchFlash[i]--; s.dirty = true; }
   }
   const prev = s.step;
   refreshPlayhead();
@@ -287,19 +352,17 @@ function onMidiMessageInternal(data) {
   const type   = status & 0xF0;
 
   if (type === 0xB0) {
-    // Knobs 71-76: direct control of main params
-    if (b1 >= 71 && b1 <= 76 && KNOB_PARAMS[b1]) {
+    // Knobs 71-76: direct control of main params (page 1 only)
+    if (s.page === PAGE_MAIN && b1 >= 71 && b1 <= 76 && KNOB_PARAMS[b1]) {
       const key   = KNOB_PARAMS[b1];
       const delta = decodeDelta(b2) * 0.01;
       setParam(key, s.params[key] + delta);
       s.focused = key;
       s.editing = true;
-      s.page    = PAGE_MAIN;
       if (key === 'map_x' || key === 'map_y') s.padDirty = true;
       return;
     }
 
-    // Jog wheel: navigate or edit
     if (b1 === CC_JOG_WHEEL) {
       const d = decodeDelta(b2);
       if (s.editing) {
@@ -311,7 +374,6 @@ function onMidiMessageInternal(data) {
       return;
     }
 
-    // Jog click: toggle edit mode
     if (b1 === CC_JOG_CLICK && b2 > 0) {
       s.editing = !s.editing;
       s.dirty   = true;
@@ -319,7 +381,6 @@ function onMidiMessageInternal(data) {
     }
   }
 
-  // Pads: set map X/Y + trigger glow update
   if (type === 0x90 && b1 >= PAD_BASE && b1 < PAD_BASE + 32 && b2 > 0) {
     const idx      = b1 - PAD_BASE;
     const { x, y } = padIndexToXY(idx);
@@ -333,10 +394,13 @@ function onMidiMessageExternal(data) {
   if (!data || data.length < 2) return;
   const b2 = data.length > 2 ? data[2] : 0;
   if ((data[0] & 0xF0) === 0x90 && b2 > 0) {
-    if (data[1] === s.params.kick_note)  s.flash[0] = FLASH_TICKS;
-    if (data[1] === s.params.snare_note) s.flash[1] = FLASH_TICKS;
-    if (data[1] === s.params.hat_note)   s.flash[2] = FLASH_TICKS;
-    s.dirty = true;
+    const note = data[1];
+    if (note === s.params.kick_note)  { s.flash[0] = FLASH_TICKS; s.dirty = true; }
+    if (note === s.params.snare_note) { s.flash[1] = FLASH_TICKS; s.dirty = true; }
+    if (note === s.params.hat_note)   { s.flash[2] = FLASH_TICKS; s.dirty = true; }
+    for (let i = 0; i < 3; i++) {
+      if (note === s.params[BRANCH_NOTE_KEYS[i]]) { s.branchFlash[i] = FLASH_TICKS; s.dirty = true; }
+    }
   }
 }
 
