@@ -659,11 +659,57 @@ static int branchage_process_midi(void *instance,
  * Parameter I/O
  * ------------------------------------------------------------------------- */
 
+static const char *const kStateKeys[] = {
+    "map_x", "map_y", "density_kick", "density_snare", "density_hat",
+    "randomness", "kick_note", "snare_note", "hat_note", "steps", "bpm",
+    "sync", "kick_branch_prob", "kick_branch_note", "kick_branch_enabled",
+    "snare_branch_prob", "snare_branch_note", "snare_branch_enabled",
+    "hat_branch_prob", "hat_branch_note", "hat_branch_enabled",
+    "kick_branch_rand_low", "kick_branch_rand_high", "snare_branch_rand_low",
+    "snare_branch_rand_high", "hat_branch_rand_low", "hat_branch_rand_high"
+};
+#define STATE_KEY_COUNT ((int)(sizeof(kStateKeys) / sizeof(kStateKeys[0])))
+
+static void branchage_set_param(void *instance, const char *key, const char *val);
+static int branchage_get_param(void *instance, const char *key,
+                               char *buf, int buf_len);
+
+static int state_read_string(const char *json, const char *key,
+                             char *out, int out_len)
+{
+    char needle[64];
+    int needle_len = snprintf(needle, sizeof(needle), "\"%s\":\"", key);
+    const char *start;
+    const char *end;
+
+    if (!json || !key || !out || out_len <= 0 || needle_len <= 0 ||
+        needle_len >= (int)sizeof(needle)) return -1;
+    start = strstr(json, needle);
+    if (!start) return -1;
+    start += needle_len;
+    end = strchr(start, '"');
+    if (!end || end == start || end - start >= out_len) return -1;
+    memcpy(out, start, (size_t)(end - start));
+    out[end - start] = '\0';
+    return (int)(end - start);
+}
+
 static void branchage_set_param(void *instance, const char *key, const char *val)
 {
     BranchageInstance *bi = (BranchageInstance *)instance;
 
     if (!bi || !key || !val) return;
+
+    if (strcmp(key, "state") == 0) {
+        char restored[64];
+        int i;
+        for (i = 0; i < STATE_KEY_COUNT; i++) {
+            if (state_read_string(val, kStateKeys[i], restored,
+                                  (int)sizeof(restored)) > 0)
+                branchage_set_param(instance, kStateKeys[i], restored);
+        }
+        return;
+    }
 
     if (strcmp(key, "map_x") == 0) {
         grids_set_map_xy(&bi->grids, parse_norm(val), bi->grids.map_y);
@@ -779,6 +825,27 @@ static int branchage_get_param(void *instance, const char *key,
     float v = -1.0f;
 
     if (!bi || !key || !buf || buf_len <= 0) return -1;
+
+    if (strcmp(key, "state") == 0) {
+        int used = snprintf(buf, (size_t)buf_len, "{\"v\":1");
+        int i;
+        if (used < 0 || used >= buf_len) return -1;
+        for (i = 0; i < STATE_KEY_COUNT; i++) {
+            char value[64];
+            int value_len = branchage_get_param(instance, kStateKeys[i],
+                                                 value, (int)sizeof(value));
+            int wrote;
+            if (value_len <= 0) return -1;
+            wrote = snprintf(buf + used, (size_t)(buf_len - used),
+                             ",\"%s\":\"%s\"", kStateKeys[i], value);
+            if (wrote < 0 || wrote >= buf_len - used) return -1;
+            used += wrote;
+        }
+        if (used + 2 > buf_len) return -1;
+        buf[used++] = '}';
+        buf[used] = '\0';
+        return used;
+    }
 
     if (strcmp(key, "steps") == 0)
         return snprintf(buf, buf_len, "%u", bi->step_length);
