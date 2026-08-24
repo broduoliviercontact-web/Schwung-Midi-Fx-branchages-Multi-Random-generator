@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "../src/host/midi_fx_api_v1.h"
 #include "../src/host/plugin_api_v1.h"
@@ -41,6 +42,52 @@ static void disable_all_branching(midi_fx_api_v1_t *api, void *instance)
     api->set_param(instance, "kick_branch_enabled", "0");
     api->set_param(instance, "snare_branch_enabled", "0");
     api->set_param(instance, "hat_branch_enabled", "0");
+}
+
+static void expect_state_roundtrip(midi_fx_api_v1_t *api)
+{
+    static const char *const keys[] = {
+        "map_x", "map_y", "density_kick", "density_snare", "density_hat",
+        "randomness", "kick_note", "snare_note", "hat_note", "steps", "bpm",
+        "sync", "kick_branch_prob", "kick_branch_note", "kick_branch_enabled",
+        "snare_branch_prob", "snare_branch_note", "snare_branch_enabled",
+        "hat_branch_prob", "hat_branch_note", "hat_branch_enabled",
+        "kick_branch_rand_low", "kick_branch_rand_high", "snare_branch_rand_low",
+        "snare_branch_rand_high", "hat_branch_rand_low", "hat_branch_rand_high"
+    };
+    static const char *const values[] = {
+        "0.12", "0.87", "0.23", "0.34", "0.45", "0.56",
+        "37", "39", "43", "29", "173", "internal",
+        "0.61", "51", "1", "0.72", "-1", "0", "0.83", "64", "1",
+        "24", "72", "25", "73", "26", "74"
+    };
+    void *source = api->create_instance(NULL, NULL);
+    void *restored = api->create_instance(NULL, NULL);
+    char state[4096];
+    char expected[64];
+    char actual[64];
+    char too_small[32];
+    int count = (int)(sizeof(keys) / sizeof(keys[0]));
+    int i;
+
+    if (!source || !restored) fail("create_instance failed for state test");
+    for (i = 0; i < count; i++) api->set_param(source, keys[i], values[i]);
+    if (api->get_param(source, "state", state, sizeof(state)) <= 0)
+        fail("state snapshot failed");
+    if (api->get_param(source, "state", too_small, sizeof(too_small)) >= 0)
+        fail("state snapshot accepted a truncating buffer");
+    api->set_param(restored, "state", state);
+    for (i = 0; i < count; i++) {
+        if (api->get_param(source, keys[i], expected, sizeof(expected)) <= 0 ||
+            api->get_param(restored, keys[i], actual, sizeof(actual)) <= 0 ||
+            strcmp(expected, actual) != 0) {
+            fprintf(stderr, "FAIL: state mismatch for %s: %s != %s\n",
+                    keys[i], expected, actual);
+            exit(1);
+        }
+    }
+    api->destroy_instance(source);
+    api->destroy_instance(restored);
 }
 
 static int play_step_after_move_clocks(midi_fx_api_v1_t *api, void *instance, int num_clocks)
@@ -282,6 +329,8 @@ int main(void)
 
     g_fake_clock_status = MOVE_CLOCK_STATUS_RUNNING;
     g_fake_bpm = 120.0f;
+
+    expect_state_roundtrip(api);
 
     expect_lane_branch(api,
                        "density_kick",  "kick_branch_enabled",
